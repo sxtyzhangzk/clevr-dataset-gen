@@ -10,6 +10,8 @@ import math, sys, random, argparse, json, os, tempfile
 from datetime import datetime as dt
 from collections import Counter
 
+import numpy as np
+
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -101,6 +103,8 @@ parser.add_argument('--output_image_dir', default='../output/images/',
 parser.add_argument('--output_scene_dir', default='../output/scenes/',
     help="The directory where output JSON scene structures will be stored. " +
          "It will be created if it does not exist.")
+parser.add_argument('--output_segment_dir', default='../output/segments/')
+
 parser.add_argument('--output_scene_file', default='../output/CLEVR_scenes.json',
     help="Path to write a single JSON file containing all scene information")
 parser.add_argument('--output_blend_dir', default='output/blendfiles',
@@ -158,9 +162,12 @@ def main(args):
   img_template = '%s%%0%dd.png' % (prefix, num_digits)
   scene_template = '%s%%0%dd.json' % (prefix, num_digits)
   blend_template = '%s%%0%dd.blend' % (prefix, num_digits)
+  segment_template = '%s%%0%dd.seg.png' % (prefix, num_digits)
+
   img_template = os.path.join(args.output_image_dir, img_template)
   scene_template = os.path.join(args.output_scene_dir, scene_template)
   blend_template = os.path.join(args.output_blend_dir, blend_template)
+  segment_template = os.path.join(args.output_segment_dir, segment_template)
 
   if not os.path.isdir(args.output_image_dir):
     os.makedirs(args.output_image_dir)
@@ -173,6 +180,7 @@ def main(args):
   for i in range(args.num_images):
     img_path = img_template % (i + args.start_idx)
     scene_path = scene_template % (i + args.start_idx)
+    segment_path = segment_template % (i + args.start_idx)
     all_scene_paths.append(scene_path)
     blend_path = None
     if args.save_blendfiles == 1:
@@ -185,6 +193,7 @@ def main(args):
       output_image=img_path,
       output_scene=scene_path,
       output_blendfile=blend_path,
+      output_segfile=segment_path,
     )
 
   # After rendering all images, combine the JSON files for each scene into a
@@ -214,6 +223,7 @@ def render_scene(args,
     output_image='render.png',
     output_scene='render_json',
     output_blendfile=None,
+    output_segfile=None,
   ):
 
   # Load the main blendfile
@@ -308,6 +318,12 @@ def render_scene(args,
 
   # Now make some random objects
   objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+
+  if output_segfile is not None:
+    _, obj_colors = render_shadeless(blender_objects, path=output_segfile)
+    assert(len(obj_colors) == len(objects))
+    for i, v in enumerate(obj_colors):
+      objects[i]['seg_color'] = v
 
   # Render the scene and dump the scene data structure
   scene_struct['objects'] = objects
@@ -486,6 +502,7 @@ def check_visibility(blender_objects, min_pixels_per_object):
   f, path = tempfile.mkstemp(suffix='.png')
   object_colors = render_shadeless(blender_objects, path=path)
   img = bpy.data.images.load(path)
+  print(np.array(img.pixels).reshape(320, 240, 4))
   p = list(img.pixels)
   color_count = Counter((p[i], p[i+1], p[i+2], p[i+3])
                         for i in range(0, len(p), 4))
@@ -524,6 +541,7 @@ def render_shadeless(blender_objects, path='flat.png'):
   utils.set_layer(bpy.data.objects['Ground'], 2)
 
   # Add random shadeless materials to all objects
+  obj_colors = []
   object_colors = set()
   old_materials = []
   for i, obj in enumerate(blender_objects):
@@ -538,6 +556,7 @@ def render_shadeless(blender_objects, path='flat.png'):
     mat.diffuse_color = [r, g, b]
     mat.use_shadeless = True
     obj.data.materials[0] = mat
+    obj_colors.append((r, g, b))
 
   # Render the scene
   bpy.ops.render.render(write_still=True)
@@ -557,7 +576,7 @@ def render_shadeless(blender_objects, path='flat.png'):
   render_args.engine = old_engine
   render_args.use_antialiasing = old_use_antialiasing
 
-  return object_colors
+  return object_colors, obj_colors
 
 
 if __name__ == '__main__':
